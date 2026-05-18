@@ -34,8 +34,10 @@ jobs:
         run: npm install
 
       - name: Build Webpack Project
-        run: npm run build
-        
+        run: |
+          npm install
+          npx webpack --mode production
+          
       - name: Upload Build Folder
         uses: actions/upload-pages-artifact@v3
         with:
