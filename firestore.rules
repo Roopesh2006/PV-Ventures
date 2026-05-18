@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Sellers ---
+    match /sellers/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidSeller(incoming());
+      allow update: if isOwner(userId) && isValidSeller(incoming()) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'companyName', 'gstin', 'address', 'accountDetails', 'businessPan', 'yearOfEstablishment']);
+
+      function isValidSeller(data) {
+        return data.userId == request.auth.uid &&
+          data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+          data.companyName is string && data.companyName.size() > 0 && data.companyName.size() < 200 &&
+          data.gstin is string && data.gstin.size() > 0 &&
+          data.address is string && data.address.size() > 0 &&
+          data.accountDetails is string && data.accountDetails.size() > 0 &&
+          data.businessPan is string && data.businessPan.size() > 0 &&
+          data.yearOfEstablishment is number &&
+          data.createdAt == request.time;
+      }
+    }
+
+    // --- Products ---
+    match /products/{productId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidProduct(incoming()) && isValidId(productId);
+      allow update: if isSignedIn() && existing().userId == request.auth.uid && isValidProduct(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'dimensions', 'weight', 'sku', 'costPrice', 'profit', 'packagingCost']);
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+
+      function isValidProduct(data) {
+        return data.userId == request.auth.uid &&
+          data.name is string && data.name.size() > 0 &&
+          data.description is string &&
+          data.sku is string &&
+          data.costPrice is number &&
+          data.profit is number &&
+          data.packagingCost is number &&
+          data.sellerId is string &&
+          data.createdAt == (resource == null ? request.time : existing().createdAt);
+      }
+    }
+  }
+}

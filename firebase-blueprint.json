@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "Seller": {
+      "title": "Seller",
+      "description": "Details for a registered seller",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full name of the seller" },
+        "companyName": { "type": "string", "description": "Legal name of the business" },
+        "gstin": { "type": "string", "description": "GST Identification Number" },
+        "address": { "type": "string", "description": "Business address" },
+        "accountDetails": { "type": "string", "description": "Current account details" },
+        "businessPan": { "type": "string", "description": "Business PAN" },
+        "yearOfEstablishment": { "type": "number", "description": "Year the business was established" },
+        "userId": { "type": "string", "description": "ID of the authenticated user" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the seller was registered" }
+      },
+      "required": ["name", "companyName", "gstin", "address", "accountDetails", "businessPan", "yearOfEstablishment", "userId", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A product listed by a seller",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Product name" },
+        "description": { "type": "string", "description": "Product description" },
+        "dimensions": { "type": "string", "description": "Dimensions (L x W x H)" },
+        "weight": { "type": "string", "description": "Weight of the product" },
+        "sku": { "type": "string", "description": "Stock Keeping Unit" },
+        "costPrice": { "type": "number", "description": "Cost price" },
+        "profit": { "type": "number", "description": "Target profit" },
+        "packagingCost": { "type": "number", "description": "Packaging cost" },
+        "sellerId": { "type": "string", "description": "ID of the seller who listed this product" },
+        "userId": { "type": "string", "description": "ID of the user who owns this product" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the product was added" }
+      },
+      "required": ["name", "description", "sku", "costPrice", "profit", "packagingCost", "sellerId", "userId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/sellers/{userId}": {
+      "schema": "Seller",
+      "description": "Collection of seller profiles"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of products across all sellers"
+    }
+  }
+}

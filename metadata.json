@@ -1,0 +1,6 @@
+{
+  "name": "SellerCentral",
+  "description": "A comprehensive seller onboarding and product management platform for vendors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
