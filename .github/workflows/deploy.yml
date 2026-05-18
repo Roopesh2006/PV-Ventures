@@ -1,4 +1,4 @@
-name: Deploy Webpack to GitHub Pages
+name: Deploy Vite to GitHub Pages
 
 on:
   push:
@@ -31,17 +31,14 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Build Webpack Project
-        run: |
-          npm install
-          npx webpack --mode production
-          
+      - name: Build Vite Project
+        run: npm run build
+
       - name: Upload Build Folder
         uses: actions/upload-pages-artifact@v3
         with:
-          # Change this to 'build' if your webpack config outputs to /build instead of /dist
           path: './dist'
 
       - name: Deploy to GitHub Pages
