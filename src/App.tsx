@@ -4,12 +4,12 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { FirebaseProvider, useAuth } from "./components/FirebaseProvider";
-import { EntryView } from "./views/EntryView";
-import { OnboardingView } from "./views/OnboardingView";
-import { DashboardView } from "./views/DashboardView";
+import { FirebaseProvider, useAuth } from "@/src/components/FirebaseProvider";
+import { EntryView } from "@/src/views/EntryView";
+import { OnboardingView } from "@/src/views/OnboardingView";
+import { DashboardView } from "@/src/views/DashboardView";
 import { doc, getDoc } from "firebase/firestore";
-import { db } from "./lib/firebase";
+import { db } from "@/src/lib/firebase";
 import { motion, AnimatePresence } from "motion/react";
 import { Loader2 } from "lucide-react";
 

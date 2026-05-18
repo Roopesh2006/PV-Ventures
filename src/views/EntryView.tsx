@@ -2,24 +2,59 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth } from "../components/FirebaseProvider";
-import { ShoppingBag, Store, ArrowRight, Github } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/src/components/FirebaseProvider";
+import { ShoppingBag, Store, ArrowRight, Mail, Lock, AlertCircle, Loader2 } from "lucide-react";
 
 interface EntryViewProps {
   onRoleSelected: (role: "buyer" | "seller") => void;
 }
 
 export const EntryView: React.FC<EntryViewProps> = ({ onRoleSelected }) => {
-  const { login, user } = useAuth();
+  const { loginWithEmail, registerWithEmail, user } = useAuth();
   const [showRoleSelection, setShowRoleSelection] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleRegisterClick = () => {
-    if (!user) {
-      login().then(() => setShowRoleSelection(true));
-    } else {
+  // Auto-advance if already logged in and role not selected
+  React.useEffect(() => {
+    if (user && !showRoleSelection) {
       setShowRoleSelection(true);
+    }
+  }, [user]);
+
+  const handleAuth = async (type: "login" | "register") => {
+    setError(null);
+    if (!email || !password) {
+      setError("Please fill in all fields");
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      if (type === "login") {
+        await loginWithEmail(email, password);
+      } else {
+        await registerWithEmail(email, password);
+      }
+      setShowRoleSelection(true);
+    } catch (err: any) {
+      console.error(err);
+      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        setError("Invalid email or password");
+      } else if (err.code === "auth/email-already-in-use") {
+        setError("Email already in use");
+      } else if (err.code === "auth/weak-password") {
+        setError("Password should be at least 6 characters");
+      } else {
+        setError("An error occurred during authentication");
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -60,33 +95,92 @@ export const EntryView: React.FC<EntryViewProps> = ({ onRoleSelected }) => {
         <AnimatePresence mode="wait">
           {!showRoleSelection ? (
             <motion.div
-              key="landing"
+              key="auth"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="max-w-md w-full text-center"
+              className="max-w-md w-full"
             >
-              <h2 className="text-3xl font-display font-medium mb-6">Start your journey</h2>
-              <p className="text-slate-500 mb-10">Sign in with your Google account to get started with your marketplace experience.</p>
-              
-              <Button 
-                onClick={handleRegisterClick} 
-                className="w-full h-14 text-lg rounded-2xl bg-primary hover:bg-slate-800 text-white transition-all shadow-lg hover:shadow-xl group"
-              >
-                Register Now
-                <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </Button>
-              
-              <div className="mt-8 flex items-center justify-center gap-6">
-                <div className="flex -space-x-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="w-10 h-10 rounded-full border-2 border-white bg-slate-200 overflow-hidden shadow-sm">
-                      <img src={`https://i.pravatar.cc/100?u=user${i}`} alt="Avatar" className="w-full h-full object-cover" />
+              <Card className="border-none shadow-2xl rounded-3xl overflow-hidden p-2">
+                <Tabs defaultValue="login" className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 h-14 p-1 bg-slate-100 rounded-2xl">
+                    <TabsTrigger value="login" className="rounded-xl data-[state=active]:bg-white data-[state=active]:shadow-sm">Sign In</TabsTrigger>
+                    <TabsTrigger value="register" className="rounded-xl data-[state=active]:bg-white data-[state=active]:shadow-sm">Sign Up</TabsTrigger>
+                  </TabsList>
+                  
+                  <div className="p-6 pt-8 space-y-6">
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="email">Email address</Label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <Input 
+                            id="email" 
+                            type="email" 
+                            placeholder="m@example.com" 
+                            className="pl-10 h-12 rounded-xl"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="password">Password</Label>
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <Input 
+                            id="password" 
+                            type="password" 
+                            className="pl-10 h-12 rounded-xl"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                          />
+                        </div>
+                      </div>
                     </div>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-400 font-medium">Joined by 10k+ sellers this month</p>
-              </div>
+
+                    <AnimatePresence>
+                      {error && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="bg-red-50 text-red-600 p-3 rounded-xl flex items-center gap-2 text-sm font-medium"
+                        >
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          {error}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <TabsContent value="login" className="mt-0">
+                      <Button 
+                        onClick={() => handleAuth("login")}
+                        disabled={isSubmitting}
+                        className="w-full h-14 text-lg rounded-2xl bg-primary hover:bg-slate-800 text-white transition-all shadow-lg hover:shadow-xl group"
+                      >
+                        {isSubmitting ? <Loader2 className="animate-spin w-5 h-5" /> : "Sign In"}
+                        {!isSubmitting && <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />}
+                      </Button>
+                    </TabsContent>
+
+                    <TabsContent value="register" className="mt-0">
+                      <Button 
+                        onClick={() => handleAuth("register")}
+                        disabled={isSubmitting}
+                        className="w-full h-14 text-lg rounded-2xl bg-primary hover:bg-slate-800 text-white transition-all shadow-lg hover:shadow-xl group"
+                      >
+                        {isSubmitting ? <Loader2 className="animate-spin w-5 h-5" /> : "Create Account"}
+                        {!isSubmitting && <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />}
+                      </Button>
+                    </TabsContent>
+                  </div>
+                </Tabs>
+              </Card>
+
+              <p className="mt-8 text-center text-sm text-slate-400">
+                Join 10k+ sellers who already simplified their business.
+              </p>
             </motion.div>
           ) : (
             <motion.div
