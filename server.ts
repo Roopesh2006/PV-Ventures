@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import admin from "firebase-admin";
 import multer from "multer";
 import { fileURLToPath } from "url";
+import cors from "cors";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +25,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use(cors());
   app.use(express.json());
 
   const upload = multer({
@@ -35,22 +37,25 @@ async function startServer() {
 
   // API Route for file upload proxy
   app.post("/api/upload", upload.single("file"), async (req, res) => {
+    console.log("POST /api/upload request received");
     try {
       const file = req.file;
       const userId = req.body.userId;
 
       if (!file) {
+         console.warn("Upload failed: No file in request");
          return res.status(400).json({ error: "No file uploaded" });
       }
 
       if (!userId) {
+         console.warn("Upload failed: No userId in request");
          return res.status(400).json({ error: "User ID is required" });
       }
 
-      // Important: Verify authentication if possible, but for now we'll rely on the userId passed
-      // and the fact that this is an internal API. In production, we'd verify the ID Token.
+      const filePath = `products/${userId}/${Date.now()}_${file.originalname}`;
+      console.log(`Starting upload to GCS: ${filePath}`);
 
-      const blob = bucket.file(`products/${userId}/${Date.now()}_${file.originalname}`);
+      const blob = bucket.file(filePath);
       const blobStream = blob.createWriteStream({
         metadata: {
           contentType: file.mimetype

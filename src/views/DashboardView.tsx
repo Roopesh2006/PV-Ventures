@@ -262,11 +262,19 @@ export const DashboardView: React.FC = () => {
       });
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Upload failed through proxy");
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+           const errData = await response.json();
+           throw new Error(errData.error || `Upload failed with status ${response.status}`);
+        } else {
+           const text = await response.text();
+           console.error("Non-JSON error response:", text);
+           throw new Error(`Upload server returned ${response.status}. Ensure you are testing in the correct environment (AI Studio Preview). Static hosts like GitHub Pages do not support this backend.`);
+        }
       }
 
-      const { url: downloadURL } = await response.json();
+      const data = await response.json();
+      const downloadURL = data.url;
       
       setValue('imageUrl', downloadURL);
       console.log("Image URL successfully updated via proxy:", downloadURL);
