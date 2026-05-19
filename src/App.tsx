@@ -29,11 +29,12 @@ const AppContent: React.FC = () => {
           if (sellerDoc.exists()) {
             setView("dashboard");
           } else {
-            // Stay on entry but we know they are logged in
-            // If they just logged in, they might be in the middle of a flow
+            // If logged in but no seller profile, they need to onboard
+            setView("onboarding");
           }
         } catch (error) {
           console.error("Error checking seller profile:", error);
+          setView("entry");
         } finally {
           setCheckingProfile(false);
         }
