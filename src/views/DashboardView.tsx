@@ -3,8 +3,46 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "motion/react";
-import { collection, addDoc, serverTimestamp, query, where, getDocs, onSnapshot, orderBy, updateDoc, doc, deleteDoc } from "firebase/firestore";
-import { db } from "@/src/lib/firebase";
+import { collection, addDoc, getDoc, serverTimestamp, query, where, getDocs, onSnapshot, orderBy, updateDoc, doc, deleteDoc } from "firebase/firestore";
+import { ref, getDownloadURL } from "firebase/storage";
+import { db, storage, auth } from "@/src/lib/firebase";
+
+// --- Error Handling ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+// ----------------------
 import { useAuth } from "@/src/components/FirebaseProvider";
 import { Product, Seller } from "@/src/types";
 import { Button } from "@/components/ui/button";
@@ -38,7 +76,10 @@ import {
   Calendar,
   Layers,
   Info,
-  ArrowRight
+  ArrowRight,
+  UploadCloud,
+  FileText,
+  Loader
 } from "lucide-react";
 
 const productSchema = z.object({
@@ -68,8 +109,12 @@ export const DashboardView: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState<"overview" | "inventory" | "analytics" | "profile">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [tempPreview, setTempPreview] = useState<string | null>(null);
 
-  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<ProductFormValues>({
+  const { register, handleSubmit, reset, setValue, watch, trigger, formState: { errors } } = useForm<ProductFormValues>({
     resolver: zodResolver(productSchema) as any,
     defaultValues: {
       unit: "Bag",
@@ -81,10 +126,13 @@ export const DashboardView: React.FC = () => {
     
     // Fetch Seller Data
     const fetchSeller = async () => {
-      const q = query(collection(db, "sellers"), where("userId", "==", user.uid));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        setSeller({ id: snap.docs[0].id, ...snap.docs[0].data() } as Seller);
+      try {
+        const sellerDoc = await getDoc(doc(db, "sellers", user.uid));
+        if (sellerDoc.exists()) {
+          setSeller({ id: sellerDoc.id, ...sellerDoc.data() } as Seller);
+        }
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `sellers/${user.uid}`);
       }
     };
     fetchSeller();
@@ -101,6 +149,8 @@ export const DashboardView: React.FC = () => {
         prods.push({ id: doc.id, ...doc.data() } as Product);
       });
       setProducts(prods);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "products");
     });
 
     return unsubscribe;
@@ -108,6 +158,10 @@ export const DashboardView: React.FC = () => {
 
   const onSubmitProduct = async (data: ProductFormValues) => {
     if (!user) return;
+    if (isUploading) {
+      setUploadError("Please wait for the image upload to complete.");
+      return;
+    }
     setLoading(true);
     
     const images = data.imageUrl ? [data.imageUrl] : [];
@@ -136,7 +190,7 @@ export const DashboardView: React.FC = () => {
       setEditingProduct(null);
       setShowAddSuccess(false);
     } catch (error) {
-      console.error("Error saving product:", error);
+      handleFirestoreError(error, editingProduct ? OperationType.UPDATE : OperationType.CREATE, "products");
     } finally {
       setLoading(false);
     }
@@ -159,7 +213,76 @@ export const DashboardView: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (window.confirm("Are you sure you want to remove this product?")) {
-      await deleteDoc(doc(db, "products", id));
+      try {
+        await deleteDoc(doc(db, "products", id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `products/${id}`);
+      }
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    if (isUploading) return;
+
+    // Check file type
+    if (!file.type.startsWith('image/')) {
+      setUploadError("Please upload an image file (PNG, JPG, or WebP).");
+      return;
+    }
+
+    // Check file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadError("File is too large. Max 5MB allowed.");
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(null);
+    setUploadError(null);
+    
+    // Create temporary local preview
+    const objectUrl = URL.createObjectURL(file);
+    setTempPreview(objectUrl);
+    setValue('imageUrl', ''); 
+
+    const storageRef = ref(storage, `products/${user.uid}/${Date.now()}_${file.name}`);
+    
+    try {
+      console.log("Starting upload through proxy for:", file.name);
+      
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("userId", user.uid);
+
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Upload failed through proxy");
+      }
+
+      const { url: downloadURL } = await response.json();
+      
+      setValue('imageUrl', downloadURL);
+      console.log("Image URL successfully updated via proxy:", downloadURL);
+    } catch (error: any) {
+      console.error("Upload proxy failure:", error);
+      let message = "Upload failed. Please check your connection and try again.";
+      if (error.message.includes("timed out")) {
+        message = "Connection timeout. The upload is taking too long.";
+      } else {
+        message = error.message || message;
+      }
+      setUploadError(message);
+      setTempPreview(null); 
+    } finally {
+      setIsUploading(false);
+      URL.revokeObjectURL(objectUrl);
     }
   };
 
@@ -234,11 +357,18 @@ export const DashboardView: React.FC = () => {
                         className="border-none shadow-sm rounded-3xl overflow-hidden cursor-pointer group hover:shadow-lg transition-all"
                      >
                         <div className="aspect-square bg-slate-50 relative overflow-hidden flex items-center justify-center p-3">
-                           <img 
-                             src={product.images[0] || `https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&q=80&w=400`} 
-                             alt={product.name} 
-                             className="max-w-full max-h-full object-contain group-hover:scale-110 transition-transform duration-500"
-                           />
+                           {product.images?.[0] ? (
+                             <img 
+                               src={product.images[0]} 
+                               alt={product.name} 
+                               className="max-w-full max-h-full object-contain group-hover:scale-110 transition-transform duration-500"
+                             />
+                           ) : (
+                             <div className="flex flex-col items-center gap-2 text-slate-300">
+                                <Package className="w-12 h-12" />
+                                <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
+                             </div>
+                           )}
                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
                               <Eye className="text-slate-900 w-8 h-8 opacity-20" />
                            </div>
@@ -283,11 +413,18 @@ export const DashboardView: React.FC = () => {
                 {products.map((product) => (
                    <Card key={product.id} className="border border-slate-100 rounded-2xl overflow-hidden group hover:border-accent transition-all hover:shadow-lg bg-white">
                      <div className="aspect-square bg-slate-50 relative overflow-hidden flex items-center justify-center p-4">
-                        <img 
-                          src={product.images[0] || `https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&q=80&w=400`} 
-                          className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-500"
-                          alt={product.name}
-                        />
+                        {product.images?.[0] ? (
+                          <img 
+                            src={product.images[0]} 
+                            className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform duration-500"
+                            alt={product.name}
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-2 text-slate-200">
+                             <Package className="w-16 h-16" />
+                             <span className="text-[10px] font-bold uppercase tracking-widest">Placeholder</span>
+                          </div>
+                        )}
                         <div className="absolute top-3 right-3 flex gap-2">
                            <Button onClick={() => handleEdit(product)} size="icon" variant="secondary" className="w-8 h-8 rounded-lg bg-white/90 backdrop-blur-md border shadow-sm">
                               <Edit2 className="w-4 h-4 text-slate-600" />
@@ -527,20 +664,20 @@ export const DashboardView: React.FC = () => {
                initial={{ opacity: 0, scale: 0.95, y: 20 }}
                animate={{ opacity: 1, scale: 1, y: 0 }}
                exit={{ opacity: 0, scale: 0.95, y: 20 }}
-               className="fixed inset-4 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-full md:max-w-2xl bg-white rounded-3xl shadow-2xl z-[101] overflow-hidden flex flex-col"
+               className="fixed inset-2 md:inset-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-full md:max-w-3xl max-h-[95vh] md:max-h-[90vh] bg-white rounded-3xl shadow-2xl z-[101] overflow-hidden flex flex-col"
             >
-              <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-950 text-white relative">
+              <div className="p-5 md:p-8 border-b border-slate-100 flex justify-between items-center bg-slate-950 text-white relative shrink-0">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 rounded-full blur-[80px] opacity-20"></div>
                  <div className="relative z-10">
-                   <h3 className="text-2xl font-display font-bold italic uppercase tracking-tight">{editingProduct ? "Update Listing." : "New Listing."}</h3>
-                   <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">{editingProduct ? `Edit ID: ${editingProduct.id}` : `Entry ID: ${Math.random().toString(36).substring(7).toUpperCase()}`}</p>
+                   <h3 className="text-xl md:text-2xl font-display font-bold italic uppercase tracking-tight">{editingProduct ? "Update Listing." : "New Listing."}</h3>
+                   <p className="text-slate-400 text-[10px] md:text-xs font-medium uppercase tracking-widest">{editingProduct ? `Edit ID: ${editingProduct.id.substring(0,8)}...` : `Entry ID: ${Math.random().toString(36).substring(7).toUpperCase()}`}</p>
                  </div>
                  <button onClick={() => { setIsAddingProduct(false); setEditingProduct(null); reset(); }} className="p-2 hover:bg-white/10 rounded-xl transition-colors text-white relative z-10">
                     <X className="w-5 h-5" />
                  </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto p-5 md:p-8 custom-scrollbar">
                  <form id="add-product-form" onSubmit={handleSubmit(onSubmitProduct)} className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
                        <div className="space-y-2 md:col-span-2">
@@ -592,9 +729,111 @@ export const DashboardView: React.FC = () => {
                        </div>
 
                        <div className="space-y-2 md:col-span-2">
-                          <Label className="text-xs font-semibold text-slate-600 ml-1">Product Visual (Image URL)</Label>
-                          <Input {...register("imageUrl")} placeholder="https://example.com/product-image.jpg" className="h-12 rounded-xl border-slate-200" />
+                          <Label className="text-xs font-semibold text-slate-600 ml-1">Product Visual (Upload Image)</Label>
+                          <div 
+                             className={`relative border-2 border-dashed rounded-2xl p-6 transition-all flex flex-col items-center justify-center gap-3 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-300 ${errors.imageUrl ? 'border-red-300' : 'border-slate-200'}`}
+                             onDragOver={(e) => e.preventDefault()}
+                             onDrop={(e) => {
+                                e.preventDefault();
+                                const file = e.dataTransfer.files?.[0];
+                                if (file) {
+                                   const input = document.getElementById('file-upload') as HTMLInputElement;
+                                   if (input) {
+                                      const dataTransfer = new DataTransfer();
+                                      dataTransfer.items.add(file);
+                                      input.files = dataTransfer.files;
+                                      handleFileChange({ target: input } as any);
+                                   }
+                                }
+                             }}
+                          >
+                             {watch('imageUrl') || tempPreview ? (
+                                <div className="relative group w-full flex flex-col items-center">
+                                   <div className="w-full aspect-[16/6] rounded-xl overflow-hidden bg-white border border-slate-100 shadow-sm flex items-center justify-center">
+                                      <img src={watch('imageUrl') || tempPreview || ""} className="max-w-full max-h-full object-contain" alt="Preview" />
+                                   </div>
+                                   {!isUploading && (
+                                      <Button 
+                                         type="button"
+                                         variant="secondary" 
+                                         size="sm" 
+                                         className="absolute top-2 right-2 h-8 rounded-lg bg-white/90 backdrop-blur-md shadow-sm"
+                                         onClick={() => { setValue('imageUrl', ''); setTempPreview(null); }}
+                                      >
+                                         <X className="w-4 h-4 mr-1" /> Replace
+                                      </Button>
+                                   )}
+                                   {isUploading && (
+                                      <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
+                                         <div className="w-8 h-8 rounded-full border-3 border-slate-200 border-t-accent animate-spin" />
+                                         <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Finalizing Upload...</p>
+                                      </div>
+                                   )}
+                                   {watch('imageUrl') && (
+                                      <p className="mt-3 text-[10px] font-bold text-emerald-600 uppercase tracking-widest flex items-center gap-1">
+                                         <CheckCircle2 className="w-3 h-3" /> Image Uploaded Successfully
+                                      </p>
+                                   )}
+                                </div>
+                             ) : (
+                                <>
+                                   {isUploading ? (
+                                      <div className="flex flex-col items-center gap-3 w-full">
+                                         <div className="w-12 h-12 rounded-full border-4 border-slate-100 border-t-accent animate-spin" />
+                                         <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                            {uploadProgress !== null ? `Uploading ${Math.round(uploadProgress)}%` : "Initializing Upload..."}
+                                         </p>
+                                         <div className="w-full max-w-[200px] h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                            <div 
+                                               className={`h-full bg-accent transition-all duration-300 ${uploadProgress === null ? 'w-1/3 animate-pulse' : ''}`} 
+                                               style={uploadProgress !== null ? { width: `${uploadProgress}%` } : {}}
+                                            />
+                                         </div>
+                                      </div>
+                                   ) : (
+                                      <>
+                                         {uploadError ? (
+                                            <div className="flex flex-col items-center gap-2 text-center p-4">
+                                               <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
+                                                  <Info className="w-5 h-5" />
+                                               </div>
+                                               <p className="text-sm font-bold text-red-600">Upload Failed</p>
+                                               <p className="text-[10px] text-red-500 font-medium max-w-[200px]">{uploadError}</p>
+                                               <Button 
+                                                  type="button" 
+                                                  variant="outline" 
+                                                  size="sm" 
+                                                  className="mt-2 h-8 rounded-lg text-[10px] font-bold uppercase tracking-widest border-red-200 text-red-600 hover:bg-red-50"
+                                                  onClick={() => setUploadError(null)}
+                                               >
+                                                  Try Again
+                                               </Button>
+                                            </div>
+                                         ) : (
+                                            <>
+                                               <div className="w-12 h-12 rounded-2xl bg-white shadow-sm border border-slate-100 flex items-center justify-center text-slate-400 group-hover:text-accent transition-colors">
+                                                  <UploadCloud className="w-6 h-6" />
+                                               </div>
+                                               <div className="text-center">
+                                                  <p className="text-sm font-bold text-slate-600">Click to upload or drag and drop</p>
+                                                  <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tight mt-1">High-res PNG, JPG or WebP (Max 5MB)</p>
+                                               </div>
+                                            </>
+                                         )}
+                                         <input 
+                                            id="file-upload"
+                                            type="file" 
+                                            accept="image/*"
+                                            className="absolute inset-0 opacity-0 cursor-pointer"
+                                            onChange={handleFileChange}
+                                         />
+                                      </>
+                                   )}
+                                </>
+                             )}
+                          </div>
                           {errors.imageUrl && <p className="text-xs text-red-500 font-medium ml-1">{errors.imageUrl.message}</p>}
+                          <input type="hidden" {...register("imageUrl")} />
                        </div>
 
                        <div className="space-y-2">
@@ -605,15 +844,15 @@ export const DashboardView: React.FC = () => {
                  </form>
               </div>
 
-              <div className="p-8 border-t border-slate-50 bg-white flex flex-col md:flex-row gap-4">
-                 <Button variant="ghost" className="flex-1 h-14 rounded-2xl text-slate-400 hover:text-slate-900" onClick={() => { setIsAddingProduct(false); setEditingProduct(null); reset(); }}>Cancel Operation</Button>
+              <div className="p-5 md:p-8 border-t border-slate-50 bg-white flex flex-col sm:flex-row gap-4 shrink-0">
+                 <Button variant="ghost" className="flex-1 h-12 md:h-14 rounded-2xl text-slate-400 hover:text-slate-900 text-xs font-bold uppercase tracking-widest" onClick={() => { setIsAddingProduct(false); setEditingProduct(null); reset(); }}>Cancel</Button>
                  <Button 
                    form="add-product-form"
                    type="submit" 
-                   disabled={loading}
-                   className="flex-1 h-14 rounded-2xl bg-slate-950 hover:bg-slate-800 text-white font-black uppercase tracking-widest text-sm shadow-xl active:scale-[0.98]"
+                   className="flex-1 h-12 md:h-14 rounded-2xl bg-slate-950 hover:bg-slate-800 text-white font-black uppercase tracking-widest text-xs shadow-xl active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                   disabled={loading || isUploading}
                  >
-                   {loading ? <Loader2 className="animate-spin" /> : (editingProduct ? "Update Catalog" : "Deploy to Inventory")}
+                   {loading ? <Loader2 className="animate-spin" /> : isUploading ? "Uploading Visual..." : (editingProduct ? "Update Catalog" : "Deploy to Inventory")}
                  </Button>
               </div>
             </motion.div>
@@ -658,11 +897,18 @@ export const DashboardView: React.FC = () => {
                         {/* Left: Main Image */}
                         <div className="lg:col-span-6 flex flex-col items-center">
                            <div className="aspect-square w-full rounded-2xl bg-slate-50 border border-slate-100 overflow-hidden flex items-center justify-center p-4">
-                              <img 
-                                src={viewingProduct.images[0] || `https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&q=80&w=800`} 
-                                className="max-w-full max-h-full object-contain drop-shadow-xl"
-                                alt={viewingProduct.name}
-                              />
+                              {viewingProduct.images?.[0] ? (
+                                <img 
+                                  src={viewingProduct.images[0]} 
+                                  className="max-w-full max-h-full object-contain drop-shadow-xl"
+                                  alt={viewingProduct.name}
+                                />
+                              ) : (
+                                <div className="flex flex-col items-center gap-4 text-slate-200">
+                                   <Package className="w-24 h-24" />
+                                   <span className="text-sm font-bold uppercase tracking-widest">Image Pending</span>
+                                </div>
+                              )}
                            </div>
                            <div className="flex gap-2 mt-4">
                               <div className="w-2 h-2 rounded-full bg-accent"></div>

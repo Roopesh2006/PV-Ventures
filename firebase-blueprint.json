@@ -24,17 +24,20 @@
       "properties": {
         "name": { "type": "string", "description": "Product name" },
         "description": { "type": "string", "description": "Product description" },
+        "sku": { "type": "string", "description": "Stock Keeping Unit" },
+        "unit": { "type": "string", "description": "Unit of measure (e.g. Bag, Kg)" },
+        "category": { "type": "string", "description": "Product category" },
         "dimensions": { "type": "string", "description": "Dimensions (L x W x H)" },
         "weight": { "type": "string", "description": "Weight of the product" },
-        "sku": { "type": "string", "description": "Stock Keeping Unit" },
         "costPrice": { "type": "number", "description": "Cost price" },
         "profit": { "type": "number", "description": "Target profit" },
         "packagingCost": { "type": "number", "description": "Packaging cost" },
+        "images": { "type": "array", "items": { "type": "string" }, "description": "List of image URLs" },
         "sellerId": { "type": "string", "description": "ID of the seller who listed this product" },
         "userId": { "type": "string", "description": "ID of the user who owns this product" },
         "createdAt": { "type": "string", "format": "date-time", "description": "When the product was added" }
       },
-      "required": ["name", "description", "sku", "costPrice", "profit", "packagingCost", "sellerId", "userId", "createdAt"]
+      "required": ["name", "description", "sku", "unit", "costPrice", "profit", "packagingCost", "sellerId", "userId", "createdAt"]
     }
   },
   "firestore": {

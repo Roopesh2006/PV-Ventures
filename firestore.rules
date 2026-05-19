@@ -16,7 +16,14 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() <= 128; // Relaxed regex for auto-generated IDs
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'roopesh.ga2024@vitstudent.ac.in'
+      );
     }
 
     function incoming() {
@@ -29,10 +36,11 @@ service cloud.firestore {
 
     // --- Sellers ---
     match /sellers/{userId} {
-      allow get: if isOwner(userId);
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
       allow create: if isOwner(userId) && isValidSeller(incoming());
-      allow update: if isOwner(userId) && isValidSeller(incoming()) && 
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'companyName', 'gstin', 'address', 'accountDetails', 'businessPan', 'yearOfEstablishment']);
+      allow update: if (isOwner(userId) && isValidSeller(incoming()) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'companyName', 'gstin', 'address', 'accountDetails', 'businessPan', 'yearOfEstablishment'])) || isAdmin();
 
       function isValidSeller(data) {
         return data.userId == request.auth.uid &&
@@ -43,28 +51,37 @@ service cloud.firestore {
           data.accountDetails is string && data.accountDetails.size() > 0 &&
           data.businessPan is string && data.businessPan.size() > 0 &&
           data.yearOfEstablishment is number &&
-          data.createdAt == request.time;
+          data.createdAt == (resource == null ? request.time : existing().createdAt);
       }
     }
 
     // --- Products ---
     match /products/{productId} {
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidProduct(incoming()) && isValidId(productId);
-      allow update: if isSignedIn() && existing().userId == request.auth.uid && isValidProduct(incoming()) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'dimensions', 'weight', 'sku', 'costPrice', 'profit', 'packagingCost']);
-      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow get: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow create: if (isSignedIn() && incoming().userId == request.auth.uid && isValidProduct(incoming()) && isValidId(productId)) || isAdmin();
+      allow update: if (isSignedIn() && existing().userId == request.auth.uid && isValidProduct(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'description', 'dimensions', 'weight', 'sku', 'unit', 'category', 
+          'costPrice', 'profit', 'packagingCost', 'images'
+        ])) || isAdmin();
+      allow delete: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
 
       function isValidProduct(data) {
         return data.userId == request.auth.uid &&
-          data.name is string && data.name.size() > 0 &&
-          data.description is string &&
-          data.sku is string &&
+          data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+          data.description is string && data.description.size() <= 2000 &&
+          data.sku is string && data.sku.size() <= 100 &&
+          data.unit is string && data.unit.size() > 0 &&
           data.costPrice is number &&
           data.profit is number &&
           data.packagingCost is number &&
           data.sellerId is string &&
+          // Handle optional fields
+          (!('category' in data) || (data.category is string && data.category.size() <= 100)) &&
+          (!('dimensions' in data) || (data.dimensions is string && data.dimensions.size() <= 100)) &&
+          (!('weight' in data) || (data.weight is string && data.weight.size() <= 100)) &&
+          (!('images' in data) || (data.images is list && data.images.size() <= 10)) &&
           data.createdAt == (resource == null ? request.time : existing().createdAt);
       }
     }
