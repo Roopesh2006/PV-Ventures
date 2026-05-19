@@ -1,40 +1,48 @@
-name: Deploy to GitHub Pages
+name: Deploy Vite to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
+          cache: 'npm'
 
-      - name: Install pnpm (if your project uses it)
-        uses: pnpm/action-setup@v2
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Vite Project
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npm run build
+
+      - name: Upload Build Folder
+        uses: actions/upload-pages-artifact@v3
         with:
-          version: 8
-
-      - name: Clean install: Remove existing lockfile and node_modules
-        run: |
-          rm -rf node_modules pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build site
-        run: pnpm run build
+          path: './dist'
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+        id: deployment
+        uses: actions/deploy-pages@v4
