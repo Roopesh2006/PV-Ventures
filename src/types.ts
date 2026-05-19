@@ -23,6 +23,9 @@ export interface Product {
   costPrice: number;
   profit: number;
   packagingCost: number;
+  images: string[];
+  category?: string;
+  unit: string; // e.g., "Bag", "Piece", "Kg"
   sellerId: string;
   userId: string;
   createdAt: Timestamp;
